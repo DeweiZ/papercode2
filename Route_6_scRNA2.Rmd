@@ -1,0 +1,147 @@
+
+```{r setup, include=FALSE}   
+knitr::opts_chunk$set(echo = TRUE,warning = F,message = F,fig.width = 10)
+```
+
+```{r}
+rm(list = ls())
+options(stringsAsFactors = F)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(tidyverse)
+library(ggplot2)
+library(clustree)
+library(celldex)
+library(SingleR)
+```
+
+```{r}
+load(file ="stepout/PCa_data6.RData")
+#ano <- readRDS("input/GSE181294_silde/slide.seq.ano.rds")
+dim(PCa_data)
+PCa_data$orig.ident <- factor(PCa_data$orig.ident)
+
+PCa_data$sample1 <- factor(case_when(
+          str_detect(PCa_data$orig.ident, pattern = "HP")~"Health" ,
+          str_detect(PCa_data$orig.ident, pattern = "Benign")~"Benign",
+          PCa_data$orig.ident %in% "Tumor07"~"LG_Tumor",
+          PCa_data$orig.ident %in% "Tumor08"~"LG_Tumor",
+          PCa_data$orig.ident %in% "Tumor01"~"HG_Tumor",
+          PCa_data$orig.ident %in% "Tumor02"~"HG_Tumor"
+          ))
+PCa_data$sample2 <- factor(case_when(
+          str_detect(PCa_data$orig.ident, pattern = "HP")~"Health" ,
+          str_detect(PCa_data$orig.ident, pattern = "Benign")~"Benign",
+          str_detect(PCa_data$orig.ident, pattern = "Tumor")~"Tumor"
+          ))
+
+colnames(PCa_data@meta.data)
+PCa_data@meta.data <- PCa_data@meta.data[,-c(8,10:33)]
+
+```
+
+```{r}
+DefaultAssay(PCa_data) <-"RNA"
+PCa_data <- NormalizeData(PCa_data)
+PCa_data  <- FindVariableFeatures(PCa_data , selection.method = "vst", nfeatures = 2000)
+PCa_data <- ScaleData(PCa_data)
+
+PCa_data <- RunPCA(PCa_data)
+pc.num=1:20
+PCa_data <- FindNeighbors(PCa_data, dims = pc.num)
+
+if(F){sce <- PCa_data 
+sce <- FindClusters(object = sce,resolution = c(seq(.1,1,.1)))
+clustree(sce@meta.data, prefix = "RNA_snn_res.")}
+
+PCa_data <- FindClusters(PCa_data, resolution = 0.4) 
+dims <- length(levels(Idents(PCa_data)))
+
+PCa_data <- RunUMAP(PCa_data, dims = 1:dims)
+UMAPPlot(PCa_data,raster=FALSE)
+```
+
+```{r eval=FALSE, include=FALSE}
+
+cluster_markers  <- t(readxl::read_xlsx(path = "input/cluster_markers.xlsx",col_names = F))
+colnames(cluster_markers) <- cluster_markers[1,]
+cluster_markers <- as.data.frame(cluster_markers[-1,])
+
+DotPlot(PCa_data,features = cluster_markers$`Mast cells` )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$`Endothelial cells`)+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$Pericytes)+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$Fibroblasts )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$PDC )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$`B cells` )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$`Plasma cells` )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$Macrophage )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$Monocytes )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$mDC )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$NK)+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$CTL )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$`Naive Th` )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$Th1 )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$Treg )+coord_flip()
+
+DotPlot(PCa_data,features = cluster_markers$`Epithelial Club` )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$`Epithelial Hillock` )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$`Epithelial Basal` )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$`Epithelial Luminal` )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$Tumor )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$Th17 )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$`CD8+ effector` )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$`CD56bright NK` )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$`CD56dim NK` )+coord_flip()
+DotPlot(PCa_data,features = cluster_markers$NKT )+coord_flip()
+
+```
+
+```{r}
+PCa_data@active.ident <- as.factor(PCa_data$cell1)
+
+DimPlot(PCa_data, 
+        reduction = "umap",
+        cols = c("#9a4700", "#376795","#72BCD5","#649b92","#bda5ac","#E76254"),
+        seed = 9196,
+        pt.size = 1,raster=FALSE)
+
+DimPlot(PCa_data, 
+        reduction = "umap", 
+        cols = c("#9a4700", "#376795","#72BCD5","#649b92","#bda5ac","#E76254"), 
+        pt.size = 1,split.by = "sample2",raster=FALSE)
+```
+
+
+```{r}
+new.cluster.ids <- c("Fibroblasts", #0
+                     "Epithelial cells", #1
+                     "Smooth muscle cells",#2
+                     "Smooth muscle cells",#3
+                     "M_Epithelial cells",#4
+                     "Epithelial cells",#5
+                     "Immune cells",#6
+                     "Epithelial cells",#7
+                     "M_Epithelial cells",#8
+                     "Epithelial cells",#9
+                     "Endothelial cells", #10
+                     "Fibroblasts"#11
+                     )
+
+names(new.cluster.ids) <- levels(PCa_data)
+PCa_data <- RenameIdents(PCa_data, new.cluster.ids)
+
+DimPlot(PCa_data, 
+        reduction = "umap",
+        cols = c("#72BCD5", "#376795", "#bda5ac", "#E76254", "#649b92", "#9a4700"),
+        seed = 9196,
+        pt.size = 1,raster=FALSE)
+
+DimPlot(PCa_data, 
+        reduction = "umap", 
+         cols = c("#72BCD5", "#376795", "#bda5ac", "#E76254", "#649b92", "#9a4700"), 
+        pt.size = 1,split.by = "sample2",raster=FALSE)
+
+save(PCa_data,file = "stepout/PCa_data_AN.Rdata")
+```
+

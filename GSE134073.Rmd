@@ -1,0 +1,255 @@
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = F,message = F,fig.width = 10)
+options(stringsAsFactors = F)
+```
+
+```{r}
+library(GEOquery)
+library(stringr)
+library(tidyr)
+library(tibble)
+library(dplyr)
+library(limma)
+library(FactoMineR)
+library(factoextra) 
+library(pheatmap)
+library(ggplot2)
+library(paletteer)
+library(ggpubr)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(dplyr)
+```
+
+```{r}
+
+rm(list = ls())
+gse_number = "GSE134073"
+eSet <- getGEO(gse_number, 
+               destdir = '.', 
+               getGPL = F)
+eSet = eSet[[1]]
+
+exp<- readRDS("input/exp.RDS")
+exp <- log2(exp)
+
+Ensembl_ID <- rownames(exp)
+gene_symbol <- bitr(Ensembl_ID, fromType="ENSEMBL", toType=c("SYMBOL", "ENTREZID"), OrgDb="org.Hs.eg.db")
+
+data=data.frame(gene_symbol,exp[match(gene_symbol$ENSEMBL,rownames(exp)),])
+data<- data %>% distinct(SYMBOL, .keep_all = T)
+
+data[data==-Inf] <- 0
+row.names(data)<- data$SYMBOL
+exp<- data[,-c(1:3)]
+exp[1:4,1:4]
+boxplot(exp)
+
+pd <- pData(eSet)
+pd<- pd[!grepl("f", pd$`risk group:ch1`),]
+
+p = identical(rownames(pd),colnames(exp));p
+if(!p) exp = exp[,match(rownames(pd),colnames(exp))]
+
+gpl_number <- eSet@annotation
+
+ids <- data[,1:3]
+save(gse_number,pd,exp,gpl_number,ids,file = "stepout/step1output.Rdata")
+```
+
+```{r}
+colnames(exp) <- pd$`diagnosis:ch1`
+write.csv(exp,"stepout/PCa_exp")
+```
+
+#2
+
+```{r}
+rm(list = ls()) 
+load(file = "stepout/step1output.Rdata")
+
+Group=ifelse(str_detect(pd$`diagnosis:ch1`,"benign prostate hyperplasia"),"BPH","PCa")
+
+Group = factor(Group,levels = c("BPH","PCa"))
+save(exp,Group,ids,gse_number,file = "stepout/step2output.Rdata")
+```
+
+#3
+
+```{r}
+rm(list = ls()) 
+load(file = 'stepout/step1output.Rdata')
+load(file = 'stepout/step2output.Rdata')
+
+dat <- exp
+dat[1:4,1:4]
+table(Group)
+g=Group
+g=relevel(g,'BPH')
+design=model.matrix(~g)
+
+batch=pd$`risk group:ch1`
+batch=factor(batch)
+batch
+
+dat[1:4,1:4]
+ex_b_limma <- removeBatchEffect(dat,
+                                batch = batch,
+                                design = design)
+                            
+dim(ex_b_limma)
+ex_b_limma[1:4,1:4]
+
+dat=as.data.frame(t(ex_b_limma))
+
+dat.pca <- PCA(dat, graph = FALSE)
+pca_plot <- fviz_pca_ind(dat.pca,
+                         geom.ind = "point", 
+                         col.ind = Group, 
+                         palette = c("#376795", "#e76254"),
+                         addEllipses = TRUE, 
+                         legend.title = "Groups"
+)
+pca_plot
+ggsave(plot = pca_plot,filename = paste0(gse_number,"_PCA.pdf"),path="stepout/",width = 12,height = 10, units = "cm")
+```
+
+```{r}
+rm(list = ls()) 
+load(file = "stepout/step2output.Rdata")
+
+design=model.matrix(~Group)
+fit=lmFit(exp,design)
+fit=eBayes(fit)
+deg=topTable(fit,coef=2,number = Inf)
+
+deg <- mutate(deg,probe_id=rownames(deg))
+head(deg)
+
+deg <- merge(deg,ids, by.x="probe_id", by.y="SYMBOL")
+head(deg)
+
+logFC_t=1
+P.Value_t = 0.05
+k1 = (deg$P.Value < P.Value_t)&(deg$logFC < -logFC_t)
+k2 = (deg$P.Value < P.Value_t)&(deg$logFC > logFC_t)
+deg <- mutate(deg,change = ifelse(k1,"down",ifelse(k2,"up","stable")))
+table(deg$change)
+
+save(Group,deg,logFC_t,P.Value_t,gse_number,file = "stepout/step4output.Rdata")
+```
+
+#5.
+
+```{r}
+p <- ggplot(data = deg, 
+            aes(x = logFC, 
+                y = -log10(P.Value))) +
+  geom_point(alpha=0.4, size=3.5, 
+             aes(color=change)) +
+  ylab("-log10(Pvalue)")+
+  scale_color_manual(values=c("#376795", "grey","#e76254"))+
+  geom_vline(xintercept=c(-logFC_t,logFC_t),lty=4,col="black",lwd=0.8) +
+  geom_hline(yintercept = -log10(P.Value_t),lty=4,col="black",lwd=0.8) +
+  theme_bw();p
+
+ggsave(plot = p,filename = paste0(gse_number,"_VCO.pdf"),path="stepout/",width = 12.5,height = 10, units = "cm")
+```
+
+```{r}
+rm(list = ls()) 
+library(msigdbr)
+library(enrichplot)
+library(tinyarray)
+library(VennDiagram)
+load(file = "stepout/step4output.Rdata")
+
+deg_PCa <- deg[!deg$change =="stable",]
+deg_PDT<- read.csv("D:/Users/Administrator/Desktop/zdw_Pca_PD/RGS2_RNF39/GSE84756_PDT/stepout/deg_PDT.csv")
+
+deg_P <- deg_PDT[deg_PDT$symbol%in%deg_PCa$probe_id,]
+deg_P2 <- deg_PCa[deg_PCa$probe_id%in%deg_PDT$symbol,]
+deg_PP <- merge(deg_P,deg_PCa,by.x="symbol",by.y = "probe_id")
+deg_PP <- deg_PP[,c(1,3,10,12,20)]
+
+colnames(deg_PP) <- c("Gene","LogFC_PDT","Change_PDT","LogFC_PCa","Change_PCa")
+A <- deg_PDT$symbol
+B <- deg_PCa$probe_id
+
+write.csv(deg_PP,file = "stepout/deg_PP.csv")
+write.csv(deg_PCa,file = "stepout/deg_PCa.csv")
+```
+
+```{r}
+venn.plot <- venn.diagram(
+  list(GSE84756=A,GSE134073=B),
+  filename = "stepout/GSE_DEGsvenn.tiff",
+  lty = 1,
+  lwd = 1,
+  col = c("#e76254","#376795"),  
+  fill = c("#e76254","#376795"),
+  alpha = 0.60,
+  cat.col = "black",
+  cat.cex = 0.8,
+  cat.fontface = "bold",
+  margin = 0.07,
+  cex = 0.8,scaled = FALSE,
+  disable.logging = T
+)
+
+```
+
+```{r}
+rm(list = ls()) 
+pdt_exp <- read.csv("D:/Users/Administrator/Desktop/zdw_Pca_PD/RGS2_RNF39/GSE84756_PDT/stepout/pdt_exp",row.names = 1)
+pca_exp <- read.csv("stepout/PCa_exp",row.names = 1)
+deg_PP <- read.csv(file = "stepout/deg_PP.csv",row.names = 1)
+
+pca_exp <- pca_exp[row.names(pca_exp)%in%deg_PP$Gene,]
+pdt_exp <- pdt_exp[row.names(pdt_exp)%in%deg_PP$Gene,]
+
+pca_exp <- cbind(pca_exp,rowMeans(pca_exp))
+pca_exp <- as.data.frame(apply(pca_exp,2,function(x){x-pca_exp[,49]})[,-49])
+
+pdt_exp  <- cbind(pdt_exp ,rowMeans(pdt_exp))
+pdt_exp  <- as.data.frame(apply(pdt_exp ,2,function(x){x-pdt_exp[,19]})[,-19])
+
+pca_exp$gene <- rownames(pca_exp)
+pdt_exp$gene <- rownames(pdt_exp)
+deg_exp <- merge(pca_exp,pdt_exp,by.x= "gene",by.y ="gene")
+row.names(deg_exp) <- deg_exp$gene
+deg_exp <- deg_exp[,-1]
+deg_exp <- as.matrix(deg_exp)
+
+colnames(deg_exp)
+Group1 = ifelse(str_detect(colnames(deg_exp),"hyperplasia"),"BPH",
+                ifelse(str_detect(colnames(deg_exp),"cancer"),"PCa",
+                       ifelse(str_detect(colnames(deg_exp),"Control"),"Control","PDT"))
+                       )
+Group1 = factor(Group1,levels = c("Control","PDT","BPH","PCa"))
+
+library(ComplexHeatmap)
+library(circlize)
+
+col = colorRamp2(breaks = c(-2, 0, 2),colors = c('#376795',"#eeeeee", '#e76254'))
+
+annotation_col = HeatmapAnnotation(cluster = anno_block(gp = gpar(fill = c("Control"="#72bcd5",'BPH'='#376795','PCa'='#e76254',"PDT"= "#F9B0A4")),
+                       labels = c("PDT","BPH","PCa","Control"),
+                       labels_gp = gpar(col = "black", fontsize = 12)))
+
+pdf(file = "heapmap.pdf",width=10, height=4)
+Heatmap(deg_exp,
+        col = col,
+        show_row_names = T,
+        top_annotation = annotation_col,
+        column_split = Group1,
+        column_title = NULL,
+        show_column_names = F,
+        cluster_rows = T,
+        show_column_dend = FALSE, 
+        show_row_dend = FALSE
+        )
+
+dev.off()
+```

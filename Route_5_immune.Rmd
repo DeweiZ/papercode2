@@ -1,0 +1,126 @@
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = F,message = F,fig.width = 10)
+options(stringsAsFactors = F)
+```
+
+```{r}
+rm(list = ls())
+library(immunedeconv)
+library(CIBERSORT)
+library(ggsci)
+library(tidyr)
+library(ggpubr)
+library(tidyverse) 
+```
+
+```{r}
+
+load("input/TCGA-PRAD_gdc.Rdata")
+group <- read.csv(file = "stepout/Group.csv")
+exp_tumor<- exp[,Group=='tumor']
+
+exp_tumor = t(t(exp_tumor)/colSums(exp_tumor)) * 10^6
+
+p = identical(group$X,colnames(exp_tumor));p
+if(!p) exp_tumor = exp_tumor[,match(group$X,colnames(exp_tumor))]
+
+```
+
+```{r}
+sig_matrix <- system.file("extdata", "LM22.txt", package = "CIBERSORT")
+exp <- exp_tumor
+```
+
+```{r eval=FALSE, include=FALSE}
+res <- cibersort(sig_matrix, exp, perm = 1000, QN = F)
+save(res,file = "stepout/res_cibersort.Rdata") 
+```
+
+```{r}
+load("stepout/res_cibersort.Rdata")
+res_cibersort <- res[,1:22]   
+ciber.res <- res_cibersort[,colSums(res_cibersort) > 0] 
+```
+
+```{r eval=FALSE, include=FALSE}
+
+mycol <- ggplot2::alpha(rainbow(ncol(ciber.res)), 0.7) 
+par(bty="o", mgp = c(2.5,0.3,0), mar = c(2.1,4.1,2.1,10.1),tcl=-.25,las = 1,xpd = F)
+barplot(as.matrix(t(ciber.res)),
+        border = NA, 
+        names.arg = rep("",nrow(ciber.res)), 
+        yaxt = "n", 
+        ylab = "Relative percentage", 
+        col = mycol) 
+axis(side = 2, at = c(0,0.2,0.4,0.6,0.8,1),
+ labels = c("0%","20%","40%","60%","80%","100%"))
+legend(par("usr")[2]-20,
+       par("usr")[4], 
+       legend = colnames(ciber.res), 
+       xpd = T,
+       fill = mycol,
+       cex = 0.6, 
+       border = NA, 
+       y.intersp = 1,
+       x.intersp = 0.2,
+       bty = "n")
+```
+
+```{r}
+rownames(group) <- group$X
+identical(rownames(ciber.res),rownames(group))
+b <- group
+class(ciber.res)
+ciber.res<- as.data.frame(ciber.res)
+ciber.res $ group <- b$risk
+ciber.res $ sample <- rownames(ciber.res)
+
+b <- gather(ciber.res,key=CIBERSORT,value = Proportion,-c(group,sample))
+
+p <- ggboxplot(b, x = "CIBERSORT", y = "Proportion",fill = "group", palette = "lancet")+
+          scale_fill_manual(values=c('Low'='#376795','High'='#e76254'))+
+          stat_compare_means(aes(group = group),
+          method = "wilcox.test",
+          label = "p.signif",
+          symnum.args=list(cutpoints = c(0, 0.001, 0.01, 0.05, 1),
+          symbols = c("***", "**", "*", "ns")))+
+          theme(text = element_text(size=10),
+          axis.text.x = element_text(angle=45, hjust=1))
+
+ggsave(plot = p ,filename = "F3D.pdf",path="stepout/",width = 25,height = 12, units = "cm")
+```
+
+```{r}
+library(Hmisc)
+load("stepout/TCGA_data.rdata")
+exp<- exp_tumor
+re <- t(ciber.res[,1:20])
+identical(colnames(re),colnames(exp))
+gs <- c("RGS2","RNF39")
+nc = t(rbind(re,exp[gs,]))
+nc[1:4,1:4]
+m = rcorr(nc)$r[1:nrow(re),(ncol(nc)-length(gs)+1):ncol(nc)]
+m[1:4,1:2]
+p = rcorr(nc)$P[1:nrow(re),(ncol(nc)-length(gs)+1):ncol(nc)]
+p[1:4,1:2]
+
+library(dplyr)
+tmp = matrix(ifelse(p<0.01,"**",
+                    ifelse(p<0.05,"*","")),nrow = nrow(p))
+
+library(pheatmap)
+library(ggplotify)
+
+p <-  as.ggplot(as.grob(pheatmap(m,
+         display_numbers = tmp,
+         angle_col =45,
+         color = colorRampPalette(c("#376795", "#eeeeee", "#e76254"))(100),
+         border_color = "#eeeeee",
+         treeheight_col = 0,
+         treeheight_row = 0,
+         ylab = "left" )))
+
+ggsave(plot = p ,filename = "F3E.pdf",path="stepout/",width = 12.5,height = 12, units = "cm")
+```
+

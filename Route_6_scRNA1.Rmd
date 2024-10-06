@@ -1,0 +1,177 @@
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = F,message = F,fig.width = 10)
+options(stringsAsFactors = F)
+```
+
+```{r}
+rm(list = ls())
+library(Seurat)
+library(decontX)
+library(DoubletFinder)
+library(ggplot2)
+library(tidyverse)
+library(clustree)
+library(glmGamPoi)
+options(Seurat.object.assay.version = 'v4')
+```
+
+```{r}
+counts <- readRDS("input/GSE181294_silde/slide.seq.raw.counts.rds")
+```
+
+```{r}
+
+PCa_data <- lapply(seq_along(counts), function(i) {
+  seurat_object <- CreateSeuratObject(counts = counts[[i]], 
+                                      project = paste0("sample.",names(counts)[i]))
+})
+
+for (i in seq_along(PCa_data)){
+  PCa_data[[i]] <- PercentageFeatureSet(PCa_data[[i]], 
+                                               pattern = "^MT-",
+                                               col.name = "percent.mt")
+}
+names(PCa_data) <- names(counts)
+
+change_1 <- list()
+for (i in seq_along(PCa_data)){
+  change_1[[i]] <- data.frame(dim(PCa_data[[i]]))
+  }
+change_1 <- as.data.frame(change_1,row.names = c("Gene","Cell"),fix.empty.names = F)
+colnames(change_1)  <- names(PCa_data) 
+sum(change_1[2,])
+```
+
+```{r}
+PCa_data <- lapply(X = PCa_data, FUN = function(x) {
+   x <- subset(x, subset = nFeature_RNA > 200 & 
+                        nFeature_RNA < 6000 & 
+                        percent.mt < 10 &
+                        nCount_RNA > 200)
+    })
+
+change_2 <- list()
+for (i in seq_along(PCa_data)){
+  change_2[[i]] <- data.frame(dim(PCa_data[[i]]))
+  }
+change_2 <- as.data.frame(change_2,row.names = c("Gene","Cell"),fix.empty.names = F)
+colnames(change_2)  <- names(PCa_data) 
+sum(change_2[2,])
+
+```
+
+```{r}
+PCa_data <- lapply(X = PCa_data, FUN = function(x){
+  counts <- x@assays[["RNA"]]@layers[["counts"]]
+  decontX_results <- decontX(counts) 
+  x$Contamination<- decontX_results$contamination
+  x = x[,x$Contamination < 0.2]
+})
+
+change_3 <- list()
+for (i in seq_along(PCa_data)){
+  change_3[[i]] <- data.frame(dim(PCa_data[[i]]))
+  }
+change_3 <- as.data.frame(change_3,row.names = c("Gene","Cell"),fix.empty.names = F)
+colnames(change_3)  <- names(PCa_data) 
+sum(change_3[2,])
+
+saveRDS(PCa_data,file="stepout/PCa_data.rds")
+```
+
+```{r eval=FALSE, include=FALSE}
+
+PCa_data <- lapply(X = PCa_data, FUN = function(x) {
+    x <- SCTransform(x)
+    x <- RunPCA(x, verbose = F)
+    pc.num=1:20
+    x <- RunUMAP(x, dims=pc.num)
+    x <- FindNeighbors(x, dims = pc.num) %>% FindClusters(resolution = 0.5)
+    }) 
+
+saveRDS(PCa_data,file="stepout/PCa_data2.rds")
+```
+
+```{r eval=FALSE, include=FALSE}
+PCa_data <- readRDS(file="stepout/PCa_data2.rds")
+
+PCa_data <- lapply(X = PCa_data, FUN = function(x) {
+
+pc.num = 1:20
+
+sweep.res.list <- paramSweep(x, PCs = pc.num, sct = T)
+sweep.stats <- summarizeSweep(sweep.res.list, GT = FALSE)  
+bcmvn <- find.pK(sweep.stats)
+
+pK_bcmvn <- bcmvn$pK[which.max(bcmvn$BCmetric)] %>% as.character() %>% as.numeric()
+
+DoubletRate = ncol(x)*8*1e-6
+
+homotypic.prop <- modelHomotypic(x@meta.data[["seurat_clusters"]])  
+
+nExp_poi <- round(DoubletRate*ncol(x)) 
+
+nExp_poi.adj <- round(nExp_poi*(1-homotypic.prop))
+
+x <- doubletFinder(x, PCs = pc.num, pN = 0.25, pK = pK_bcmvn,
+                         nExp = nExp_poi.adj, reuse.pANN = F, sct = T)
+DF.name = colnames(x@meta.data)[grepl("DF.classifications",colnames(x@meta.data))]
+
+x = x[, x@meta.data[, DF.name] == "Singlet"]
+
+})
+
+saveRDS(PCa_data,file="stepout/PCa_data3.rds")
+
+change_4 <- list()
+for (i in seq_along(PCa_data)){
+  change_4[[i]] <- data.frame(dim(PCa_data[[i]]))
+  }
+change_4 <- as.data.frame(change_4,row.names = c("Gene","Cell"),fix.empty.names = F)
+colnames(change_4)  <- names(PCa_data) 
+sum(change_4[2,])
+
+change <- rbind(change_1,change_2,change_3,change_4)
+rownames(change) <- c("Gene1","Cell1","Gene2","Cell2","Gene3","Cell3","Gene4","Cell4")
+
+save(change,file = "stepout/chang3.csv")
+```
+
+```{r}
+
+for (i in seq_along(PCa_data)){
+  PCa_data[[i]] <- PercentageFeatureSet(PCa_data[[i]], 
+                                               pattern = "^MT-",
+                                               col.name = "percent.mt")
+}
+```
+
+```{r}
+PCa_data <- readRDS(file="stepout/PCa_data3.rds")
+
+if (!requireNamespace("glmGamPoi", quietly = TRUE)) {
+PCa_data <- lapply(X = PCa_data, FUN = SCTransform, vars.to.regress = "percent.mt", verbose = FALSE)
+}else{
+PCa_data <- lapply(X = PCa_data, FUN = SCTransform, vars.to.regress = "percent.mt", verbose = FALSE, method = "glmGamPoi")
+}
+
+features <- SelectIntegrationFeatures(object.list = PCa_data,nfeatures = 2000)
+PCa_data <- PrepSCTIntegration(object.list = PCa_data, anchor.features = features)
+
+save(features,PCa_data, file ="stepout/PCa_data4.RData")
+```
+
+```{r}
+PCa_data_anchors <- FindIntegrationAnchors(object.list = PCa_data,normalization.method = "SCT", anchor.features = features)
+save(PCa_data_anchors, file ="stepout/PCa_data5.RData")
+```
+
+
+```{r}
+load(file="stepout/PCa_data5.RData")
+PCa_data <- IntegrateData(anchorset = PCa_data_anchors ,normalization.method = "SCT")
+
+save(PCa_data, file ="stepout/PCa_data6.RData")
+```
+

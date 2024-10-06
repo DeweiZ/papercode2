@@ -1,0 +1,203 @@
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	fig.width = 10,
+	message = FALSE,
+	warning = FALSE
+)
+options(stringsAsFactors = F)
+```
+
+```{r}
+rm(list = ls())
+library(tinyarray)
+library(glmnet)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(readr)
+library(survival)
+library(survminer)
+library(caret)
+```
+
+```{r}
+
+load("input/TCGA-PRAD_gdc.Rdata")
+exp_tumor <- log2(edgeR::cpm(exp[,Group=='tumor'])+1)
+exp_normal <- log2(edgeR::cpm(exp[,Group=='normal'])+1)
+
+deg_PP <- read.csv(file = "D:/Users/Administrator/Desktop/zdw_Pca_PD/RGS2_RNF39/GSE134073_PCa/stepout/deg_PP.csv", row.names = 1)
+
+```
+
+```{r}
+
+gene_deg <- as.data.frame(exp_tumor[rownames(exp_tumor) %in% deg_PP$Gene,],optional = T)
+gene_deg <- as.data.frame(t(gene_deg))
+
+gene_deg_normal<- as.data.frame(exp_normal[rownames(exp_tumor) %in% deg_PP$Gene,],optional = T)
+```
+
+```{r}
+gene_deg$ID <- substr(rownames(gene_deg),1,12)
+gene_deg$tID <- rownames(gene_deg)
+gene_deg <- gene_deg[!duplicated(gene_deg$ID),]
+```
+
+```{r}
+clinical2 <- read_tsv("input/clinical.tsv")
+colnames(clinical2)
+clinical2 <- clinical2[,c("case_submitter_id","ajcc_clinical_m","ajcc_clinical_t","ajcc_pathologic_n","ajcc_pathologic_t","primary_gleason_grade","secondary_gleason_grade")]
+clinical2<- clinical2[!duplicated(clinical2$case_submitter_id),]
+clinical2$G_grade <- as.integer(str_sub(clinical2$primary_gleason_grade,start = 9,end = 9))+as.integer(str_sub(clinical2$secondary_gleason_grade,start = 9,end = 9))
+clinical2 <- clinical2[,c(1,2,4,5,8)]
+clinical2[clinical2 =="'--"] <- NA
+
+colnames(clinical)
+meta = clinical[,c(
+  'bcr_patient_barcode',
+  'gender',
+  'vital_status',
+  "race_list",
+  "days_to_birth" ,                                  
+  "days_to_death",                                   
+  "days_to_last_followup",
+  "days_to_bone_scan_performed",
+  "bone_scan_results",
+  "new_tumor_events",
+  "days_to_first_biochemical_recurrence"
+)]
+
+meta <- merge(meta,gene_deg,by.x= "bcr_patient_barcode" ,by.y= "ID")
+
+meta <- merge(meta,clinical2,by.x= "bcr_patient_barcode" ,by.y= "case_submitter_id")
+row.names(meta)<- meta$tID
+
+colnames(meta)=c('ID','gender','event',"race",'age','death_time','followup_time',"PFS_times","PFS_event","BCR_event","BCR_times","CXCL2","COL12A1","RND3","RGS2", "IL6","STOM","GEM","LCLAT1","TRIB1","SOCS1","RNF39","tID","stage_M","stage_N","stage_T","G_grade")
+colnames(gene_deg)
+```
+
+```{r}
+
+meta<- tidyr::unite(meta, "OS_time", death_time, followup_time,sep="",remove= T,na.rm = T)
+meta$follow_up_time <- meta$OS_time
+meta$OS_time <- as.integer(meta$OS_time)
+
+table(meta$event)
+meta$event[meta$event=="Alive"] <- "0"
+meta$event[meta$event=="Dead"] <- "1"
+meta$event<- as.integer(meta$event)
+table(meta$event)
+
+range(meta$OS_time)
+meta$OS_time = meta$OS_time/30
+range(meta$OS_time)
+```
+
+```{r}
+
+write.csv(meta,file = "stepout/meta.csv")
+
+meta_dfs<- read.csv(file = "stepout/meta_set.csv")
+
+length(colnames(exp_tumor))
+p = identical(meta_dfs$tID,colnames(exp_tumor));p
+if(!p) exp_tumor = exp_tumor[,match(meta_dfs$tID,colnames(exp_tumor))]
+length(colnames(exp_tumor))
+```
+
+```{r}
+
+meta_dfs$BCR_event[str_detect(meta_dfs$BCR_event,"NO")] <- "0"
+meta_dfs$BCR_event[str_detect(meta_dfs$BCR_event,"YES")] <- "1"
+
+meta_dfs$BCR_times <- as.integer(meta_dfs$BCR_times)
+table(meta_dfs$BCR_event)
+meta_dfs$BCR_event <- as.integer(meta_dfs$BCR_event)
+meta_dfs$BCR_times = meta_dfs$BCR_times/30
+
+meta_dfs$ BCR_times <- round(meta_dfs$BCR_times/12,5)
+```
+
+```{r}
+save(exp_normal,exp_tumor,meta_dfs,file = "stepout/TCGA_data.rdata")
+```
+
+```{r}
+rm(list = ls())
+load(file = "stepout/TCGA_data.rdata")
+deg_PP <- read.csv(file = "D:/Users/Administrator/Desktop/zdw_Pca_PD/RGS2_RNF39/GSE134073_PCa/stepout/deg_PP.csv", row.names = 1)
+
+gene_set <- deg_PP$Gene
+exp_set <- exp_tumor[gene_set,]
+
+train_exp <- exp_set
+train_cl <- meta_dfs[,c(1:16)]
+```
+
+```{r}
+
+cox <- apply(
+train_exp,1,function(x){
+train_cl$gene <- as.numeric(x)
+cox_genes <- coxph(Surv(BCR_times, BCR_event) ~ gene, data = train_cl)
+coef <- coef(cox_genes) 
+SE <- sqrt(diag(vcov(cox_genes))) 
+HR <- exp(coef) 
+cox_need <- cbind(HR = HR,
+HR.95L = exp(coef - qnorm(.975, 0, 1) * SE),
+HR.95H = exp(coef + qnorm(.975, 0, 1) * SE),
+pvalue = 1 - pchisq((coef/SE)^2, 1))
+return(cox_need['gene',])
+}
+)
+unicox <- t(cox)
+head(unicox)
+write.csv(unicox,file = "stepout/deg_unicox.csv")
+
+diff_unicox <- unicox[unicox[,4]<0.05,]
+dim(diff_unicox) 
+table(diff_unicox[,1]<1)
+head(diff_unicox)
+
+```
+
+```{r}
+exp <- train_exp
+cl <- train_cl
+
+exp <- exp[rownames(diff_unicox),]
+
+x <- t(exp)
+y <- data.matrix(Surv(time = cl$BCR_times,event = cl$BCR_event))
+x[1:2,1:2]
+head(y)
+
+fit <- glmnet(x, y, family = 'cox', type.measure = "deviance", nfolds = 10)
+plot(fit,xvar = 'lambda',label = T)
+
+set.seed(9196)
+lasso_fit <- cv.glmnet(x, y, family = 'cox', type.measure = 'deviance', nfolds = 10)
+plot(lasso_fit)
+
+```
+
+```{r}
+best_lambda <- lasso_fit$lambda.min
+best_lambda
+
+model_lasso <- glmnet(x, y, family = 'cox', type.measure = 'deviance', nfolds = 10,lambda = best_lambda)
+
+coef(model_lasso)
+
+gene_min <- rownames(model_lasso$beta)[as.numeric(model_lasso$beta)!=0]
+gene_min 
+
+```
+
+```{r}
+save(gene_min,train_cl,train_exp,file = "stepout/TCGA_lasso.rdata")
+```
+

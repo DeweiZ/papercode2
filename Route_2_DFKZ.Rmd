@@ -1,0 +1,182 @@
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = F,message = F,fig.width = 10)
+options(stringsAsFactors = F)
+```
+
+```{r}
+rm(list = ls())
+library(ggplot2)
+library(pheatmap)
+library(ggplotify)
+library(cowplot)
+library(readxl)
+library(survminer)
+library(survival)
+library(clusterProfiler)
+```
+
+```{r}
+dkfz_cl<- read_xlsx(path = "input/prostate_dkfz_2018/data_clinical.xlsx")
+dkfz_rna<- read_xlsx(path = "input/prostate_dkfz_2018/data_mrna_seq_rpkm.xlsx")
+
+final_genes <- c('RGS2',"RNF39")
+```
+
+```{r}
+
+dkfz_cl <- as.data.frame(dkfz_cl[,c(10,3,5,6,8:9,13)])
+dkfz_cl <- dkfz_cl[!dkfz_cl$TIME_FROM_SURGERY_TO_BCR_LASTFU == "NA",]
+
+dkfz_rna <- as.data.frame(dkfz_rna[!duplicated(dkfz_rna$Hugo_Symbol),])
+rownames(dkfz_rna) <- dkfz_rna$Hugo_Symbol
+dkfz_rna<- dkfz_rna[,-c(1:2)]
+dkfz_rna <- as.data.frame(log2(edgeR::cpm(dkfz_rna)+1))
+
+exp2 <- as.data.frame(t(dkfz_rna[final_genes,]))
+exp2$id <- rownames(exp2)
+
+dt <- merge(dkfz_cl,exp2,by.x = "SAMPLE_ID",by.y = "id")
+
+colnames(dt) <- c("id","age","stage","psa","BCR_status","BCR_time","G_score","RGS2","RNF39")
+dt$psa <- as.numeric(dt$psa)
+dt$BCR_status <- as.numeric(dt$BCR_status)
+dt$BCR_time <- as.numeric(dt$BCR_time)
+dt$BCR_time<- dt$BCR_time/12
+
+dkfz_rna <- dkfz_rna[,colnames(dkfz_rna)%in%dt$id]
+
+write.csv(dkfz_rna,"stepout/dkfz_rna.csv" )
+```
+
+```{r}
+load('stepout/coef.Rdata')
+coef
+exp <- dt[,8:9]
+
+x <- data.frame(exp$RGS2*coef[1],exp$RNF39*coef[2])
+colnames(x) <- names(coef)
+head(x)
+
+dt$score <- apply(x,1,sum) 
+dfkz_test <- dt
+
+save(coef,dfkz_test,file = c('stepout/Risk_Score_dfkz.Rdata'))
+```
+
+```{r}
+colnames(dfkz_test)
+
+dt <- dfkz_test[,c(6,5,8:10)]
+rownames(dt)<- dfkz_test$id
+
+dt <- dt[order(dt$score,decreasing = F),] 
+dt$id <- c(1:length(dt$score))
+dt$BCR_status <- ifelse(dt$BCR_status == 0 ,'free','recur') 
+dt$status <- factor(dt$BCR_status,levels = c('recur','free')) 
+dt$Risk_Group <- ifelse(dt$score<median(dt$score),'Low Risk','High Risk') 
+dt$Risk_Group <- factor(dt$Risk_Group,levels = c('Low Risk','High Risk')) 
+head(dt)
+
+exp <- dt[,c(3,4)] 
+head(exp)
+
+p1 <- ggplot(dt,aes(x = id,y = score)) +
+geom_point(aes(col = Risk_Group)) +
+scale_colour_manual(values = c("#376795","#e76254")) +
+geom_hline(yintercept = median(dt$score), colour="grey", linetype="dashed", size=0.8) +
+geom_vline(xintercept = sum(dt$Risk_Group == "Low Risk"), colour="grey", linetype = "dashed", size = 0.8) +
+theme_bw()
+p1
+
+p2 <- ggplot(dt,aes(x = id,y = BCR_time)) +
+geom_point(aes(col = status)) +
+scale_colour_manual(values = c("#e76254","#376795")) +
+geom_vline(xintercept = sum(dt$Risk_Group == "Low Risk"), colour = "grey", linetype = "dashed", size = 0.8) +
+theme_bw()
+p2
+
+p4 <- plot_grid(p1,p2, nrow = 2, align = "v", axis = "tlbr")
+
+ggsave(plot = p4,filename = "F2D1.pdf",path="stepout/",width = 20,height = 15, units = "cm")
+```
+
+```{r}
+
+mycol <- colorRampPalette(c("#376795","#f8ac8c","#e76254"))(100) 
+exp2 <- t(scale(exp)) 
+
+annotation <- data.frame(Type = as.vector(dt[,8]))
+rownames(annotation) <- colnames(exp2)
+annotation$Type <- factor(annotation$Type,levels = c('Low Risk','High Risk'))
+head(annotation)
+
+library(pheatmap)
+ann_colors <- list(Type = c('Low Risk' = "#376795",
+'High Risk' = "#e76254")) 
+
+pheatmap(exp2,
+col= mycol,
+cluster_rows = F,
+cluster_cols = F,
+show_colnames = F,
+annotation_col = annotation,
+annotation_colors = ann_colors,
+annotation_legend = F
+)
+
+p3 <- as.ggplot(as.grob(pheatmap(exp2,
+col= mycol,
+cluster_rows = F,
+cluster_cols = F,
+show_colnames = F,
+annotation_col = annotation,
+annotation_colors = ann_colors,
+annotation_legend = F
+)))
+
+ggsave(plot = p3,filename = "F2D2.pdf",path="stepout/",width = 18.2,height = 7.5, units = "cm")
+
+```
+
+```{r}
+dt <- dfkz_test 
+
+dt$risk <- ifelse(dt$score > median(dt$score),"High","Low")
+Group<- dt[,c("id","risk")]
+write.csv(Group,"stepout/Group_DFKZ.csv")
+
+fit <- survfit(Surv(BCR_time, BCR_status) ~ risk, data = dt)
+fit
+
+pdf(file = "stepout/F2F.pdf",width=3.8, height=5.5)
+
+ggsurvplot(
+fit,
+data = dt,
+censor = T, 
+censor.shape = "|", censor.size = 4,
+conf.int = TRUE, 
+conf.int.style = "ribbon",
+conf.int.alpha = 0.3,
+pval = TRUE, 
+pval.size = 5,
+legend = "top",
+legend.title = 'Risk Score',
+legend.labs = c("High Risk","Low Risk"),
+xlab = "Years",
+ylab = "Survival probablity",
+title = "Discovery dfkz Cohort",
+palette = c('#e76254','#376795'), 
+ggtheme = theme_bw(), 
+risk.table = TRUE, 
+risk.table.col = "strata", 
+risk.table.title = 'Number at risk',
+fontsize = 4,
+risk.table.y.text = FALSE,
+risk.table.height = 0.2,
+)
+
+dev.off()
+```
+

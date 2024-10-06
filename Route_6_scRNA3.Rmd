@@ -1,0 +1,174 @@
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = F,message = F,fig.width = 10)
+options(stringsAsFactors = F)
+```
+
+```{r}
+rm(list = ls())
+library(Seurat)
+library(scRNAtoolVis)
+library(ggplot2)
+library(patchwork)
+library(ggpubr)
+```
+
+```{r}
+load(file = "stepout/PCa_data_AN.Rdata")
+marker <- c("RGS2","RNF39")
+
+p1 <- DimPlot(PCa_data, 
+        reduction = "umap",
+        cols = c("#72BCD5", "#376795", "#bda5ac", "#E76254", "#649b92", "#9a4700"),
+        seed = 9196,
+        pt.size = 1,raster=FALSE)+theme(legend.position="none")
+
+ggsave(plot = p1,filename = "F5A.pdf",path="stepout/",width = 10,height = 10, units = "cm")
+
+p2 <- DimPlot(PCa_data, 
+        reduction = "umap", 
+         cols = c("#72BCD5", "#376795", "#bda5ac", "#E76254", "#649b92", "#9a4700"), 
+        pt.size = 1,split.by = "sample2",raster=FALSE)
+
+ggsave(plot = p2,filename = "F5B.pdf",path="stepout/",width = 31.5,height = 10.5, units = "cm")
+```
+
+```{r}
+PCa_data <- JoinLayers(PCa_data)
+#Markers <- FindAllMarkers(PCa_data, logfc.threshold = 0.1,only.pos = FALSE )
+#write.csv(Markers,"stepout/ALL_markerS.csv")
+Markers<- read.csv("stepout/ALL_markerS.csv",row.names = 1)
+
+p3 <- jjVolcano(diffData = Markers,
+          log2FC.cutoff = 0.5, 
+          size  = 4 ,
+          pSize = 1 ,
+          fontface = 'italic', 
+          aesCol = c('#376795','#e76254'), 
+          cluster.order =c("Epithelial cells","M_Epithelial cells","Fibroblasts","Immune cells","Smooth muscle cells","Endothelial cells"),
+          tile.col = c("#72BCD5", "#376795", "#bda5ac", "#E76254", "#649b92", "#9a4700") , 
+          myMarkers = marker)
+
+ggsave(plot = p3,filename = "F5C.pdf",path="stepout/",width = 22,height = 12, units = "cm")
+```
+
+```{r}
+library(ggrepel)
+table(Idents(PCa_data))
+#markers2 <- FindMarkers(PCa_data, ident.1 = "Epithelial cells", ident.2= 'M_Epithelial cells')
+#write.csv(markers2,"stepout/markers2.csv")
+markers2<- read.csv("stepout/markers2.csv",row.names = 1)
+
+log2FC = 1
+padj = 0.05 
+
+markers2 $threshold="ns";
+markers2 [which(markers2 $avg_log2FC  > log2FC & markers2 $p_val_adj <padj),]$threshold="up";
+markers2 [which(markers2 $avg_log2FC  < (-log2FC) & markers2 $p_val_adj < padj),]$threshold="down";
+markers2 $threshold=factor(markers2 $threshold, levels=c('down','ns','up'))
+
+markers2  <- markers2  %>%
+  mutate(Difference = pct.1 - pct.2) %>% 
+  rownames_to_column("gene")
+
+data <- markers2[markers2$gene ==marker,]
+
+ggplot(markers2 , aes(x=Difference, y=avg_log2FC, color = threshold)) + 
+  geom_point(size=1) + 
+  scale_color_manual(values=c( '#376795',"#eeeeee",'#e76254') ) + 
+  geom_vline(xintercept = 0.0,linetype=2)+
+  geom_hline(yintercept = 0,linetype=2)+
+  theme_classic()+
+  geom_label_repel(data= data, 
+                   aes(label = marker), label.padding = 0.1, 
+                   color="black",
+                   segment.colour = "black",
+                   segment.size = 0.3, size=4)
+
+```
+
+```{r}
+deg_PP <- read.csv(file = "D:/Users/Administrator/Desktop/zdw_Pca_PD/RGS2_RNF39/GSE134073_PCa/stepout/deg_PP.csv", row.names = 1)
+
+p4 <- DotPlot(PCa_data,features = deg_PP$Gene, cols = c("#eeeeee", "#e76254"),group.by = "sample2")+coord_flip()
+
+ggsave(plot = p4,filename = "S3A.pdf",path="stepout/",width = 12.5,height = 10, units = "cm")
+```
+
+```{r}
+
+Calcium <- read.csv("input/hsa04020.csv")
+MEPC_data <- subset(PCa_data, idents=c("M_Epithelial cells"),sample2 == "Tumor")
+
+MEPC_data <- AddModuleScore(object = MEPC_data, features = list(Calcium$genelist04020), ctrl = 100, name = "calscore",assay = "RNA", search = T )
+
+MEPC_data[["cal_group"]] <- ifelse(MEPC_data@meta.data[,"calscore1"] > mean(MEPC_data@meta.data[,"calscore1"]),"CAL_High_MEPC","CAL_Low_MEPC")
+Idents(MEPC_data) <- MEPC_data$cal_group
+
+DimPlot(MEPC_data,reduction = "umap",label = F,pt.size = 1,split.by = "cal_group")
+
+p5 <- FeaturePlot(MEPC_data,features="calscore1",  min.cutoff = -0.05,max.cutoff = 0.05,cols = c("#eeeeee", "#e76254"),pt.size = 1,split.by = "cal_group")+ theme(legend.position="left")
+
+ggsave(plot = p5,filename = "S3B1.pdf",path="stepout/",width = 20,height = 10, units = "cm")
+
+save(MEPC_data,file = "stepout/MEPC_data.Rdata")
+```
+
+```{r}
+
+CAF<- c('VIM','ACTA2','TGFB1','AR','TGFBR1','TGFBR2','FAP','CD90','CD105','COL1A1','COL1A2','FSP1','PDPN','DPP4','PDGFRA','PDGFRB','TNC','ASPN','POSTN','EGF','FGF7','FGF2','FGF10','IGF1','HGF','VEGFA','OGN','FN1','FBLN1','CTSK','PARVA','ZEB1','SPARC')
+
+write.csv(CAF,file = "stepout/CAF.csv")
+
+Fib_data <- subset(PCa_data, idents=c("Fibroblasts"),sample2 == "Tumor")
+
+Fib_data <- AddModuleScore(object = Fib_data, features = list(CAF), ctrl = 100, name = "CAFscore",assay = "RNA", search = T )
+
+Fib_data[["caf_group"]] <- ifelse(Fib_data@meta.data[,"CAFscore1"] > mean(Fib_data@meta.data[,"CAFscore1"]),"CAF_High_FIB","CAF_Low_FIB")
+Idents(Fib_data) <- Fib_data$caf_group
+
+DimPlot(Fib_data,reduction = "umap",label = F,pt.size = 1,split.by = "sample1")
+
+p6 <- FeaturePlot(Fib_data,features="CAFscore1",min.cutoff = -0.3,max.cutoff = 0.3,cols = c("#eeeeee", "#e76254"),pt.size = 1,split.by = "caf_group")+theme(legend.position="left")
+
+ggsave(plot = p6,filename = "S3B2.pdf",path="stepout/",width = 20,height = 10, units = "cm")
+
+save(Fib_data,file = "stepout/Fib_data.Rdata")
+```
+
+```{r}
+Fib_data <- AddModuleScore(object = Fib_data, features = list(Calcium$genelist04020), ctrl = 100, name = "F_calscore",assay = "RNA", search = T )
+
+Fib_data[["Fcal_group"]] <- ifelse(Fib_data@meta.data[,"F_calscore1"] > mean(Fib_data@meta.data[,"F_calscore1"]),"Fcal_High_FIB","Fcal_Low_FIB")
+Idents(Fib_data) <- Fib_data$Fcal_group
+
+DimPlot(Fib_data,reduction = "umap",label = F,pt.size = 1,split.by = "caf_group")
+
+FeaturePlot(Fib_data,features="F_calscore1",min.cutoff = -0.05,max.cutoff = 0.05,cols = c("#eeeeee", "#e76254"),pt.size = 1,split.by = "caf_group")
+
+CAF_calscore <- FetchData(Fib_data,vars = c('caf_group', 'F_calscore1'))
+CAF_calscore$caf_group <- as.factor(CAF_calscore$caf_group)
+caf_group <- CAF_calscore$caf_group 
+
+p7 = ggplot(CAF_calscore,aes(x = caf_group, y = CAF_calscore[,"F_calscore1"],color= caf_group))+
+  geom_boxplot(size=1,width=0.5) + 
+  xlab("Group") +
+  ylab("calscore") +
+  scale_color_manual(values=c('CAF_Low_FIB'='#376795','CAF_High_FIB'='#e76254'))+
+  theme_classic()+
+  stat_compare_means(comparisons = list( c("CAF_Low_FIB", "CAF_High_FIB")))
+p7
+
+ggsave(plot = p7,filename = "S3C.pdf",path="stepout/",width = 12.5,height = 10, units = "cm")
+
+library(ggpubr)
+
+DotPlot(Fib_data,features = "RGS2",group.by = "caf_group",cols = c("#eeeeee", "#e76254"))+coord_flip() 
+
+```
+
+```{r}
+p8 <- DotPlot(Fib_data, features = "RGS2",cols = c("#eeeeee","#e76254"))+xlab("RGS2_Expression")+ylab("Group")
+
+ggsave(plot = p8,filename = "F6C.pdf",path="stepout/",width = 12.5,height = 10, units = "cm")
+```

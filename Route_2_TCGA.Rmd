@@ -1,0 +1,173 @@
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = F,message = F,fig.width = 10)
+options(stringsAsFactors = F)
+```
+
+```{r}
+rm(list = ls())
+library(ggplot2)
+library(pheatmap)
+library(ggplotify)
+library(cowplot)
+library(readxl)
+library(survminer)
+library(survival)
+library(clusterProfiler)
+```
+
+```{r}
+load(file = "stepout/TCGA_lasso.rdata")
+```
+
+```{r}
+
+exp <- t(train_exp[gene_min,])
+
+dt <- cbind(train_cl,exp)
+
+final_genes <- c('RGS2',"RNF39")
+exp <- as.data.frame(exp[,final_genes])
+dt <- cbind(train_cl,exp)
+
+colnames(dt)
+train_cox <- coxph(Surv(BCR_times, BCR_event) ~ RGS2+RNF39, data = dt)
+train_cox
+
+coef <- coef(train_cox)
+coef
+```
+
+```{r}
+coef
+head(exp)
+
+x <- data.frame(exp$RGS2*coef[1],exp$RNF39*coef[2])
+colnames(x) <- names(coef)
+head(x)
+
+dt$score <- apply(x,1,sum) 
+
+train <- dt
+head(train)
+
+save(coef,train,file = c('stepout/Risk_Score.Rdata'))
+save(coef,file = 'stepout/coef.Rdata')
+```
+
+```{r}
+colnames(train) 
+
+dt <- train[,c(10:11,17:19)] 
+dt <- dt[order(dt$score,decreasing = F),] 
+dt$id <- c(1:length(dt$score))
+dt$BCR_event <- ifelse(dt$BCR_event == 0 ,'free','recur') 
+dt$status <- factor(dt$BCR_event,levels = c('recur','free')) 
+dt$Risk_Group <- ifelse(dt$score<median(dt$score),'Low Risk','High Risk') 
+dt$Risk_Group <- factor(dt$Risk_Group,levels = c('Low Risk','High Risk')) 
+head(dt)
+
+exp <- dt[,c(3,4)]
+head(exp)
+
+p1 <- ggplot(dt,aes(x = id,y = score)) +
+geom_point(aes(col = Risk_Group)) +
+scale_colour_manual(values = c("#376795","#e76254")) +
+geom_hline(yintercept = median(dt$score), colour="grey", linetype="dashed", size=0.8) +
+geom_vline(xintercept = sum(dt$Risk_Group == "Low Risk"), colour="grey", linetype = "dashed", size = 0.8) +
+theme_bw()
+p1
+
+p2 <- ggplot(dt,aes(x = id,y = BCR_times)) +
+geom_point(aes(col = status)) +
+scale_colour_manual(values = c("#e76254","#376795")) +
+geom_vline(xintercept = sum(dt$Risk_Group == "Low Risk"), colour = "grey", linetype = "dashed", size = 0.8) +
+theme_bw()
+p2
+
+p4 <- plot_grid(p1,p2, nrow = 2, align = "v", axis = "tlbr")
+
+ggsave(plot = p4,filename = "p4.pdf",path="stepout/",width = 20,height = 15, units = "cm")
+```
+
+
+```{r}
+
+mycol <- colorRampPalette(c("#376795","#f8ac8c","#e76254"))(100) 
+exp2 <- t(scale(exp)) 
+
+annotation <- data.frame(Type = as.vector(dt[,8]))
+rownames(annotation) <- colnames(exp2)
+annotation$Type <- factor(annotation$Type,levels = c('Low Risk','High Risk'))
+head(annotation)
+
+library(pheatmap)
+ann_colors <- list(Type = c('Low Risk' = "#376795",
+'High Risk' = "#e76254")) 
+
+pheatmap(exp2,
+col= mycol,
+cluster_rows = F,
+cluster_cols = F,
+show_colnames = F,
+annotation_col = annotation,
+annotation_colors = ann_colors,
+annotation_legend = F,
+breaks = seq(-3,5,by = 0.1)
+)
+
+p3 <- as.ggplot(as.grob(pheatmap(exp2,
+col= mycol,
+cluster_rows = F,
+cluster_cols = F,
+show_colnames = F,
+annotation_col = annotation,
+annotation_colors = ann_colors,
+annotation_legend = F,
+breaks = seq(-3,5,by = 0.1)
+)))
+
+ggsave(plot = p3,filename = "p3.pdf",path="stepout/",width = 18.2,height = 7.5, units = "cm")
+
+```
+
+```{r}
+dt <- train 
+dt$risk <- ifelse(dt$score > median(dt$score),"High","Low")
+Group<- dt[,c("ID","risk")]
+write.csv(Group,"stepout/Group.csv")
+
+fit <- survfit(Surv(BCR_times, BCR_event) ~ risk, data = dt)
+fit
+
+pdf(file = "stepout/surv.pdf",width=3.8, height=5.5)
+
+ggsurvplot(
+fit,
+data = dt,
+censor = T, 
+censor.shape = "|", censor.size = 4,
+conf.int = TRUE,
+conf.int.style = "ribbon",
+conf.int.alpha = 0.3,
+pval = TRUE,
+pval.size = 5,
+legend = "top", 
+legend.title = 'Risk Score',
+legend.labs = c("High Risk","Low Risk"),
+xlab = "Years",
+ylab = "Survival probablity",
+title = "Discovery TCGA Cohort",
+palette = c('#e76254','#376795'),
+ggtheme = theme_bw(), 
+risk.table = TRUE, 
+risk.table.col = "strata", 
+risk.table.title = 'Number at risk',
+fontsize = 4,
+risk.table.y.text = FALSE,
+risk.table.height = 0.2
+)
+
+dev.off()
+```
+

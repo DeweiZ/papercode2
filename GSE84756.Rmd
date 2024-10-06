@@ -1,0 +1,172 @@
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	fig.width = 10,
+	message = FALSE,
+	warning = FALSE
+)
+options(stringsAsFactors = F)
+```
+
+```{r}
+rm(list = ls())
+library(GEOquery)
+library(stringr)
+library("illuminaHumanv4.db")
+library(tidyr)
+library(tibble)
+library(dplyr)
+library(limma)
+library(FactoMineR)
+library(factoextra) 
+library(ggplot2)
+library(paletteer)
+library(ggpubr)
+```
+
+```{r}
+gse_number = "GSE84756"
+eSet <- getGEO(gse_number, 
+               destdir = '.', 
+               getGPL = F)
+eSet = eSet[[1]]
+
+exp <- exprs(eSet)
+exp [1:4,1:4]
+boxplot(exp)
+
+pd <- pData(eSet)
+pd<- pd[!grepl("DT", pd$`treatment:ch1`),]
+pd<- pd[!grepl("LC50", pd$`treatment:ch1`),]
+
+p = identical(rownames(pd),colnames(exp));p
+if(!p) exp = exp[,match(rownames(pd),colnames(exp))]
+
+gpl_number <- eSet@annotation
+save(gse_number,pd,exp,gpl_number,file = "stepout/step1output.Rdata")
+```
+
+#2
+```{r}
+
+rm(list = ls())  
+load(file = "stepout/step1output.Rdata")
+
+Group=ifelse(str_detect(pd$"treatment:ch1","Control"),"Control","PDT")
+
+Group = factor(Group,levels = c("Control","PDT"))
+
+ls('package:illuminaHumanv4.db')
+ids <- toTable(illuminaHumanv4SYMBOL)
+save(exp,Group,ids,gse_number,file = "stepout/step2output.Rdata")
+```
+
+#3
+```{r}
+rm(list = ls()) 
+load(file = 'stepout/step1output.Rdata')
+load(file = 'stepout/step2output.Rdata')
+
+dat <- exp
+dat[1:4,1:4]
+table(Group)
+g=Group
+g=relevel(g,'Control')
+design=model.matrix(~g)
+
+batch=pd$characteristics_ch1
+batch=factor(batch)
+batch
+
+dat[1:4,1:4]
+ex_b_limma <- removeBatchEffect(dat,
+                                batch = batch,
+                                design = design)
+                           
+dim(ex_b_limma)
+ex_b_limma[1:4,1:4]
+
+
+dat=as.data.frame(t(ex_b_limma))
+
+dat.pca <- PCA(dat, graph = F)
+pca_plot <- fviz_pca_ind(dat.pca,
+                         geom.ind = "point", 
+                         col.ind = Group, 
+                         palette = c("#376795", "#e76254"),
+                         addEllipses = TRUE, 
+                         legend.title = "Groups"
+)
+pca_plot
+ggsave(plot = pca_plot,filename = paste0(gse_number,"_PCA.pdf"),path="stepout/",width = 12.5,height = 10, units = "cm")
+```
+
+#4
+```{r}
+rm(list = ls()) 
+load(file = "stepout/step2output.Rdata")
+
+design=model.matrix(~Group)
+fit=lmFit(exp,design)
+fit=eBayes(fit)
+deg=topTable(fit,coef=2,number = Inf)
+
+deg <- mutate(deg,probe_id=rownames(deg))
+head(deg)
+
+ids = ids[!duplicated(ids$symbol),]
+deg <- inner_join(deg,ids,by="probe_id")
+head(deg)
+nrow(deg)
+
+logFC_t=1
+P.Value_t = 0.05
+k1 = (deg$P.Value < P.Value_t)&(deg$logFC < -logFC_t)
+k2 = (deg$P.Value < P.Value_t)&(deg$logFC > logFC_t)
+deg <- mutate(deg,change = ifelse(k1,"down",ifelse(k2,"up","stable")))
+table(deg$change)
+
+s2e <- toTable(illuminaHumanv4ENTREZID)
+dim(deg)
+deg <- inner_join(deg,s2e,by=c("probe_id"="probe_id"))
+dim(deg)
+length(unique(deg$symbol))
+save(Group,deg,logFC_t,P.Value_t,gse_number,file = "stepout/step4output.Rdata")
+
+deg_PDT <- deg[!deg$change =="stable",]
+write.csv(deg_PDT,file="stepout/deg_PDT.csv")
+
+```
+
+```{r}
+
+rm(list = ls()) 
+load(file = 'stepout/step1output.Rdata')
+ids <- toTable(illuminaHumanv4SYMBOL)
+exp <- as.data.frame(exp)
+exp$probe_id <- rownames(exp)
+exp <- inner_join(exp,ids,by="probe_id")
+exp <- exp[!duplicated(exp$symbol),]
+row.names(exp) <- exp$symbol
+exp <- exp[,-c(19:20)]
+colnames(exp) <- pd$`treatment:ch1`
+write.csv(exp,"stepout/pdt_exp")
+```
+
+#5. 
+
+```{r}
+
+p <- ggplot(data = deg, 
+            aes(x = logFC, 
+                y = -log10(P.Value))) +
+  geom_point(alpha=0.4, size=3.5, 
+             aes(color=change)) +
+  ylab("-log10(Pvalue)")+
+  scale_color_manual(values=c("#376795", "#eeeeee","#e76254"))+
+  geom_vline(xintercept=c(-logFC_t,logFC_t),lty=4,col="black",lwd=0.8) +
+  geom_hline(yintercept = -log10(P.Value_t),lty=4,col="black",lwd=0.8) +
+  theme_bw();p
+
+ggsave(plot = p,filename = paste0(gse_number,"_VCO.pdf"),path="stepout/",width = 12.5,height = 10, units = "cm")
+```

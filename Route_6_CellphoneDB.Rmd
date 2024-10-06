@@ -1,0 +1,159 @@
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	fig.width = 10,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+```{r eval=FALSE, include=FALSE}
+rm(list = ls())
+library(Seurat)
+load(file = "stepout/PCa_data_AN.Rdata")
+load(file = "stepout/MEPC_data.Rdata")
+load(file = "stepout/Fib_data.Rdata")
+PCa_data <- JoinLayers(PCa_data)
+Epi_data <- subset(PCa_data, idents=c("Epithelial cells"),sample2 == "Tumor")
+
+test_counts_1 <- as.data.frame(GetAssayData(MEPC_data, assay = "RNA", slot = "data"))
+test_counts_2 <- as.data.frame(GetAssayData(Fib_data, assay = "RNA", slot = "data"))
+test_counts_3 <- as.data.frame(GetAssayData(Epi_data, assay = "RNA", slot = "data"))
+
+test_counts_1<- test_counts_1[rownames(test_counts_1)%in%rownames(test_counts_3),]
+test_counts_2<- test_counts_2[rownames(test_counts_2)%in%rownames(test_counts_3),]
+
+test_counts <- cbind(test_counts_1,test_counts_2,test_counts_3)
+
+test_meta1 <-  data.frame(Cell = rownames(MEPC_data@meta.data), 
+                          cell_type = MEPC_data@active.ident) 
+test_meta1$cell_type <- "M Epithelial cells"
+
+test_meta2 <-  data.frame(Cell = rownames(Fib_data@meta.data), 
+                          cell_type = Fib_data@active.ident ) 
+
+test_meta3 <-  data.frame(Cell = rownames(Epi_data@meta.data), 
+                          cell_type = Epi_data@active.ident ) 
+
+test_meta <- rbind(test_meta1,test_meta2,test_meta3)
+
+head(test_meta)
+test_meta$cell_type=gsub(' ','_',test_meta$cell_type)
+test_meta$cell_type=gsub('\\+','',test_meta$cell_type) 
+table(test_meta$cell_type)
+length(unique(test_meta$Cell))
+
+identical(colnames(test_counts),test_meta$Cell) 
+test_counts=cbind(rownames(test_counts),test_counts)
+colnames(test_counts)[1]='Gene'
+
+library(clusterProfiler)
+library(org.Hs.eg.db)
+ids <- bitr(test_counts$Gene,'SYMBOL','ENSEMBL','org.Hs.eg.db')
+test_counts <- merge(test_counts,ids,by.x='Gene',by.y='SYMBOL')
+test_counts <- test_counts[!duplicated(test_counts$ENSEMBL),]
+rownames(test_counts)<- test_counts$ENSEMBL
+test_counts$Gene <- rownames(test_counts)
+library(dplyr)
+test_counts <- dplyr::select(test_counts,-ENSEMBL)
+
+write.table(test_counts, "input1/test_counts.txt",  row.names=F, sep='\t',quote = F)
+write.table(test_meta, "input1/test_meta.txt", row.names=F, sep='\t',quote = F)
+
+```
+
+```{r}
+rm(list = ls()) 
+library(tidyverse)
+library(ggplot2)
+library(patchwork)
+purrr::walk(list.files('cpplot/',pattern="*.R$",full.names = T),source,.GlobalEnv)
+```
+
+```{r}
+mypvals <- read.table("input1/pvalues.txt",header = T,sep = "\t",stringsAsFactors = F)
+mymeans <- read.table("input1/means.txt",header = T,sep = "\t",stringsAsFactors = F)
+
+
+p <- ccc_number_heatmap2(pfile = "input1/pvalues.txt",color.palette = c("#376795","#f8ac8c","#e76254"),ccc.number.max = 8)#5-6.45size
+
+ggsave(plot = p,filename = "F5D.pdf",path="stepout/",width =16.5,height = 12, units = "cm")
+
+ccc_bubble(pfile="input/pvalues.txt",mfile="input/means.txt")
+
+```
+
+```{r eval=FALSE, include=FALSE}
+rm(list = ls())
+library(Seurat)
+load(file = "stepout/PCa_data_AN.Rdata")
+load(file = "stepout/MEPC_data.Rdata")
+load(file = "stepout/Fib_data.Rdata")
+Epi_data <- subset(PCa_data, idents=c("Epithelial cells"),sample2 == "Tumor")
+Epi_data  <- JoinLayers(Epi_data)
+
+test_counts_1 <- as.data.frame(GetAssayData(MEPC_data, assay = "RNA", slot = "data"))
+test_counts_2 <- as.data.frame(GetAssayData(Fib_data, assay = "RNA", slot = "data"))
+test_counts_3 <- as.data.frame(GetAssayData(Epi_data, assay = "RNA", slot = "data"))
+
+test_counts_1<- test_counts_1[rownames(test_counts_1)%in%rownames(test_counts_3),]
+test_counts_2<- test_counts_2[rownames(test_counts_2)%in%rownames(test_counts_3),]
+
+test_counts <- cbind(test_counts_1,test_counts_2,test_counts_3)
+
+test_meta1 <-  data.frame(Cell = rownames(MEPC_data@meta.data), 
+                          cell_type = MEPC_data@active.ident ) 
+
+test_meta2 <-  data.frame(Cell = rownames(Fib_data@meta.data), 
+                          cell_type = Fib_data@active.ident ) 
+
+test_meta3 <-  data.frame(Cell = rownames(Epi_data@meta.data), 
+                          cell_type = Epi_data@active.ident ) 
+
+test_meta <- rbind(test_meta1,test_meta2,test_meta3)
+
+head(test_meta)
+test_meta$cell_type=gsub(' ','_',test_meta$cell_type)
+test_meta$cell_type=gsub('\\+','',test_meta$cell_type) 
+table(test_meta$cell_type)
+length(unique(test_meta$Cell))
+
+identical(colnames(test_counts),test_meta$Cell) 
+test_counts=cbind(rownames(test_counts),test_counts)
+colnames(test_counts)[1]='Gene'
+
+library(clusterProfiler)
+library(org.Hs.eg.db)
+ids <- bitr(test_counts$Gene,'SYMBOL','ENSEMBL','org.Hs.eg.db')
+test_counts <- merge(test_counts,ids,by.x='Gene',by.y='SYMBOL')
+test_counts <- test_counts[!duplicated(test_counts$ENSEMBL),]
+rownames(test_counts)<- test_counts$ENSEMBL
+test_counts$Gene <- rownames(test_counts)
+library(dplyr)
+test_counts <- dplyr::select(test_counts,-ENSEMBL)
+
+write.table(test_counts, "input/test_counts.txt",  row.names=F, sep='\t',quote = F)
+write.table(test_meta, "input/test_meta.txt", row.names=F, sep='\t',quote = F)
+
+```
+
+```{r}
+rm(list = ls()) 
+library(tidyverse)
+library(ggplot2)
+library(patchwork)
+purrr::walk(list.files('cpplot/',pattern="*.R$",full.names = T),source,.GlobalEnv)
+```
+
+```{r}
+mypvals <- read.table("input/pvalues.txt",header = T,sep = "\t",stringsAsFactors = F)
+mymeans <- read.table("input/means.txt",header = T,sep = "\t",stringsAsFactors = F)
+
+
+p <- ccc_number_heatmap2(pfile = "input/pvalues.txt",color.palette = c("#376795","#f8ac8c","#e76254"),ccc.number.max = 5)
+
+ggsave(plot = p,filename = "F5E.pdf",path="stepout/",width =16.5,height = 12, units = "cm")
+
+ccc_bubble(pfile="input/pvalues.txt",mfile="input/means.txt")
+
+```
